@@ -26,17 +26,9 @@ class SULM(nn.Module):
         self.tag_num = config['tag_num']
 
         # tag bias: random initialization (average init in orig code)
-        self.user_reason_bias = nn.Parameter(torch.Tensor(config['user_num'], config['tag_num']), requires_grad=True)
-        self.item_reason_bias = nn.Parameter(torch.Tensor(config['item_num'], config['tag_num']), requires_grad=True)
-        self.global_reason_bias = nn.Parameter(torch.Tensor(1, config['tag_num']), requires_grad=True)
-
-        self.user_video_bias = nn.Parameter(torch.Tensor(config['user_num'], config['tag_num']), requires_grad=True)
-        self.item_video_bias = nn.Parameter(torch.Tensor(config['item_num'], config['tag_num']), requires_grad=True)
-        self.global_video_bias = nn.Parameter(torch.Tensor(1, config['tag_num']), requires_grad=True)
-
-        self.user_interest_bias = nn.Parameter(torch.Tensor(config['user_num'], config['tag_num']), requires_grad=True)
-        self.item_interest_bias = nn.Parameter(torch.Tensor(config['item_num'], config['tag_num']), requires_grad=True)
-        self.global_interest_bias = nn.Parameter(torch.Tensor(1, config['tag_num']), requires_grad=True)
+        self.user_aspect_bias = nn.Parameter(torch.Tensor(config['user_num'], config['tag_num']), requires_grad=True)
+        self.item_aspect_bias = nn.Parameter(torch.Tensor(config['item_num'], config['tag_num']), requires_grad=True)
+        self.global_aspect_bias = nn.Parameter(torch.Tensor(1, config['tag_num']), requires_grad=True)
 
         # coefficients
         self.user_coeff = nn.Parameter(torch.Tensor(config['user_num'], config['tag_num']), requires_grad=True)
@@ -45,23 +37,22 @@ class SULM(nn.Module):
 
         self.mse_loss = nn.MSELoss(reduction='mean')
         self.bce_loss = nn.BCELoss(reduction='mean')
+        self.ce_loss = nn.CrossEntropyLoss(reduction='mean')
+        # cannot do ce loss of 3 classes, because the aspect scores are 0-1 matrix and has 1 value only
         self.sigmoid = nn.Sigmoid()
         self.device=config['device']
+        self.conti2disc = torch.tensor([0.2, 0.4, 0.6, 0.8, 1.0]).to(self.device, right = True)
+        # https://pytorch.org/docs/stable/generated/torch.bucketize.html 
+
 
         self._init_weights()
 
     def _init_weights(self):
         torch.nn.init.normal_(self.user_tag_embeddings, mean=0.0, std=0.01)
         torch.nn.init.normal_(self.item_tag_embeddings, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.user_reason_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.item_reason_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.global_reason_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.user_video_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.item_video_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.global_video_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.user_interest_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.item_interest_bias, mean=0.0, std=0.01)
-        torch.nn.init.normal_(self.global_interest_bias, mean=0.0, std=0.01)
+        torch.nn.init.normal_(self.user_aspect_bias, mean=0.0, std=0.01)
+        torch.nn.init.normal_(self.item_aspect_bias, mean=0.0, std=0.01)
+        torch.nn.init.normal_(self.global_aspect_bias, mean=0.0, std=0.01)
         torch.nn.init.normal_(self.user_coeff, mean=0.0, std=0.01)
         torch.nn.init.normal_(self.item_coeff, mean=0.0, std=0.01)
         torch.nn.init.normal_(self.global_coeff, mean=1.0 / self.tag_num, std=0.01)
@@ -70,99 +61,59 @@ class SULM(nn.Module):
         return
 
     def predict_rating(self, user, item):
-        uif_score = (self.get_all_tag_score(user, item, 0) + self.get_all_tag_score(user, item, 1) +
-                     self.get_all_tag_score(user, item, 2)) / 3
+        uif_score = self.get_all_tag_score(user, item)  # (B, T)
         uif_coeff = self.user_coeff[user] + self.item_coeff[item] + self.global_coeff
         rating = torch.mul(uif_score, uif_coeff).sum(dim=1)
         return rating  # (B)
 
+    def predict_discretized_rating(self, user, item):
+        continuous_rating = self.predict_rating(user, item)
+        discretized_rating = torch.bucketize(continuous_rating, self.conti2disc)
+        return discretized_rating
+
     # Calculate the aspect sentiments predictions based on user and item profile
-    def get_all_tag_score(self, user, item, tag_type):
+    def get_all_tag_score(self, user, item):
         u_emb = self.user_tag_embeddings[user]  # (B,T,E)
         i_emb = self.item_tag_embeddings[item]  # (B,T,E)
-        if tag_type == 0:
-            user_bias = self.user_reason_bias
-            item_bias = self.item_reason_bias
-            global_bias = self.global_reason_bias
-        elif tag_type == 1:
-            user_bias = self.user_video_bias
-            item_bias = self.item_video_bias
-            global_bias = self.global_video_bias
-        else:
-            user_bias = self.user_interest_bias
-            item_bias = self.item_interest_bias
-            global_bias = self.global_interest_bias
+        user_bias = self.user_aspect_bias
+        item_bias = self.item_aspect_bias
+        global_bias = self.global_aspect_bias
 
         score = torch.mul(u_emb, i_emb).sum(dim=2) + user_bias[user] + item_bias[item] + global_bias  # (B,T)
         score = self.sigmoid(score)
         return score  # (B, T)
 
 
-    def predict_reason_score(self, user, item, tag):
+    def predict_aspect_score(self, user, item, tag):
         score = torch.tensor([]).to(self.device)
         for i in range(user.size()[0]):
             u_emb = self.user_tag_embeddings[user[i]][tag[i]]  # (C, E)
             i_emb = self.item_tag_embeddings[item[i]][tag[i]]  # (C, E)
-            u_bias = self.user_reason_bias[user[i]][tag[i]]  # (C)
-            i_bias = self.item_reason_bias[item[i]][tag[i]]  # (C)
-            g_bias = self.global_reason_bias[0][tag[i]]  # (C)
-            s = torch.mul(u_emb, i_emb).sum(dim=1) + u_bias + i_bias + g_bias  # (C)
-            s = self.sigmoid(s).unsqueeze(0)  # (C)->(1,C)
-            score = torch.cat((score, s), dim=0)  # (B,C)
-        return score  # (B, C)
-
-    def predict_video_score(self, user, item, tag):
-        score = torch.tensor([]).to(self.device)
-        for i in range(user.size()[0]):
-            u_emb = self.user_tag_embeddings[user[i]][tag[i]]  # (C, E)
-            i_emb = self.item_tag_embeddings[item[i]][tag[i]]  # (C, E)
-            u_bias = self.user_video_bias[user[i]][tag[i]]  # (C)
-            i_bias = self.item_video_bias[item[i]][tag[i]]  # (C)
-            g_bias = self.global_video_bias[0][tag[i]]  # (C)
-            s = torch.mul(u_emb, i_emb).sum(dim=1) + u_bias + i_bias + g_bias  # (C)
-            s = self.sigmoid(s).unsqueeze(0)  # (C)->(1,C)
-            score = torch.cat((score, s), dim=0)  # (B,C)
-        return score  # (B, C)
-
-    def predict_interest_score(self, user, item, tag):
-        score = torch.tensor([]).to(self.device)
-        for i in range(user.size()[0]):
-            u_emb = self.user_tag_embeddings[user[i]][tag[i]]  # (C, E)
-            i_emb = self.item_tag_embeddings[item[i]][tag[i]]  # (C, E)
-            u_bias = self.user_interest_bias[user[i]][tag[i]]  # (C)
-            i_bias = self.item_interest_bias[item[i]][tag[i]]  # (C)
-            g_bias = self.global_interest_bias[0][tag[i]]  # (C)
+            u_bias = self.user_aspect_bias[user[i]][tag[i]]  # (C)
+            i_bias = self.item_aspect_bias[item[i]][tag[i]]  # (C)
+            g_bias = self.global_aspect_bias[0][tag[i]]  # (C)
             s = torch.mul(u_emb, i_emb).sum(dim=1) + u_bias + i_bias + g_bias  # (C)
             s = self.sigmoid(s).unsqueeze(0)  # (C)->(1,C)
             score = torch.cat((score, s), dim=0)  # (B,C)
         return score  # (B, C)
 
 
-    def predict_specific_tag_score(self, user, item, tag, tag_type):
+    def predict_specific_tag_score(self, user, item, tag):
         user_indices = torch.stack([user, tag], dim=1)
         item_indices = torch.stack([item, tag], dim=1)
 
         u_emb = self.user_tag_embeddings[user_indices[:, 0], user_indices[:, 1]]  # (B, E)
         i_emb = self.item_tag_embeddings[item_indices[:, 0], item_indices[:, 1]]
 
-        if tag_type == 0:
-            user_bias = self.user_reason_bias[user_indices[:, 0], user_indices[:, 1]]  # (B,)
-            item_bias = self.item_reason_bias[item_indices[:, 0], item_indices[:, 1]]  # (B,)
-            global_bias = self.global_reason_bias[0][tag]  # (B,)
-        elif tag_type == 1:
-            user_bias = self.user_video_bias[user_indices[:, 0], user_indices[:, 1]]
-            item_bias = self.item_video_bias[item_indices[:, 0], item_indices[:, 1]]
-            global_bias = self.global_video_bias[0][tag]
-        else:
-            user_bias = self.user_interest_bias[user_indices[:, 0], user_indices[:, 1]]
-            item_bias = self.item_interest_bias[item_indices[:, 0], item_indices[:, 1]]
-            global_bias = self.global_interest_bias[0][tag]
-
-        score = torch.mul(u_emb, i_emb).sum(dim=1) + user_bias + item_bias + global_bias
+        user_bias = self.user_aspect_bias[user_indices[:, 0], user_indices[:, 1]]  # (B,)
+        item_bias = self.item_aspect_bias[item_indices[:, 0], item_indices[:, 1]]  # (B,)
+        global_bias = self.global_aspect_bias[0][tag]  # (B,)
+        # same as https://github.com/kobauman/SULM/blob/91832a00aa006533db5b551c60e7ce3c692c62b8/sulm.py#L378
+        score = torch.mul(u_emb, i_emb).sum(dim=1) + user_bias + item_bias + global_bias # (B,), fit only for binary classification
         score = self.sigmoid(score)
         return score
 
-    def calculate_rating_loss(self, user, item, rating_label):
+    def calculate_rating_mseloss(self, user, item, rating_label):
         """
             In order to keep the rating prediction task consistent with other base model settings,
         discard the 0/1 setting in the paper
@@ -172,30 +123,25 @@ class SULM(nn.Module):
         rating_loss = self.mse_loss(predicted_rating, rating_label)
         return rating_loss
 
-    def calculate_reason_loss(self, user, item, reason_tag, reason_label):
-        # BCEloss
-        reason_score = self.predict_specific_tag_score(user, item, reason_tag, tag_type=0)
-        reason_loss = self.bce_loss(reason_score, reason_label)
-        return reason_loss
+    def calculate_rating_celoss(self, user, item, rating_label):
+        # classify into 3 classes and use cross entropy loss to guide the rating prediction task
+        # 0 - 0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0
+        # 1, 2, 3, 4, 5 star
+        predicted_discretized_rating = self.predict_discretized_rating(user, item)
+        rating_loss = self.ce_loss(predicted_discretized_rating, rating_label)
+        return rating_loss
 
-    def calculate_video_loss(self, user, item, video_tag, video_label):
-        # BCEloss
-        video_score = self.predict_specific_tag_score(user, item, video_tag, tag_type=1)
-        video_loss = self.bce_loss(video_score, video_label)
-        return video_loss
 
-    def calculate_interest_loss(self, user, item, interest_tag, interest_label):
+    def calculate_aspect_loss(self, user, item, aspect_tag, aspect_label):
         # BCEloss
-        interest_score = self.predict_specific_tag_score(user, item, interest_tag, tag_type=2)
-        interest_loss = self.bce_loss(interest_score, interest_label)
-        return interest_loss
+        aspect_score = self.predict_specific_tag_score(user, item, aspect_tag)
+        aspect_loss = self.bce_loss(aspect_score, aspect_label)
+        return aspect_loss
 
     def calculate_l2_loss(self):
         l2_loss1 = self.user_coeff.norm(2) + self.item_coeff.norm(2) + self.global_coeff.norm(2)
         l2_loss2 = self.user_tag_embeddings.norm(2) + self.item_tag_embeddings.norm(2) + \
-                   self.user_reason_bias.norm(2) + self.item_reason_bias.norm(2) + self.global_reason_bias.norm(2) + \
-                   self.user_video_bias.norm(2) + self.item_video_bias.norm(2) + self.global_video_bias.norm(2) + \
-                   self.user_interest_bias.norm(2) + self.item_interest_bias.norm(2) + self.global_interest_bias.norm(2)
+                   self.user_aspect_bias.norm(2) + self.item_aspect_bias.norm(2) + self.global_aspect_bias.norm(2)
         return l2_loss1 + l2_loss2
 
     # Ranking score for Recommendations
