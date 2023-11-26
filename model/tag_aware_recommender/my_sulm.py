@@ -119,10 +119,11 @@ class SULM(nn.Module):
         aspect_score = self.predict_specific_tag_score(user, item, aspect_tag, tag_type=0)
         aspect_loss = self.bce_loss(aspect_score, aspect_label)
         return aspect_loss
+
     def calculate_l2_loss(self):
         l2_loss1 = self.user_coeff.norm(2) + self.item_coeff.norm(2) + self.global_coeff.norm(2)
         l2_loss2 = self.user_tag_embeddings.norm(2) + self.item_tag_embeddings.norm(2) + \
-                   self.user_aspect_bias.norm(2) + self.item_aspect_bias.norm(2) + self.global_aspect_bias.norm(2) 
+                   self.user_aspect_bias.norm(2) + self.item_aspect_bias.norm(2) + self.global_aspect_bias.norm(2)
         return l2_loss1 + l2_loss2
 
     # Ranking score for Recommendations
