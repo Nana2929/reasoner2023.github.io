@@ -1,0 +1,29 @@
+# model params
+model: 'SULM'
+model_type: 'tag_aware'
+embedding_size: 16
+
+# run params
+rating_weight: 1
+pos_aspect_weight: 1
+neg_aspect_weight: 1
+l2_weight: 0.0001
+lr: 0.001
+learner: 'adam'
+weight_decay: 0
+epochs: 100
+batch_size: 128 #256
+top_k: 10
+neg_sample_num: 1
+endure_times: 3
+train_type: 'bce'
+rating_train_type: 'ce'
+candidate_num: 100
+num_workers: 20
+tagset_num: 2
+main_log_dir: './tensorboard_logs'
+# general params
+seed: 1111
+cuda: True
+gpu_id: 0
+checkpoint: './checkpoints/sulm'
