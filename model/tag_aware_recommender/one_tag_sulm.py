@@ -14,9 +14,9 @@ import torch
 import torch.nn as nn
 
 
-class SULM(nn.Module):
+class ONE_TAG_SULM(nn.Module):
     def __init__(self, config):
-        super(SULM, self).__init__()
+        super(ONE_TAG_SULM, self).__init__()
 
         self.candidate_num = config['candidate_num']
         self.user_tag_embeddings = nn.Parameter(
@@ -35,14 +35,16 @@ class SULM(nn.Module):
         self.item_coeff = nn.Parameter(torch.Tensor(config['item_num'], config['tag_num']), requires_grad=True)
         self.global_coeff = nn.Parameter(torch.Tensor(1, config['tag_num']), requires_grad=True)
 
+        # classifier
+        self.rating_classifier = nn.Linear(config['embedding_size']*2, config['rating_num'])
+
         self.mse_loss = nn.MSELoss(reduction='mean')
         self.bce_loss = nn.BCELoss(reduction='mean')
         self.ce_loss = nn.CrossEntropyLoss(reduction='mean')
         # cannot do ce loss of 3 classes, because the aspect scores are 0-1 matrix and has 1 value only
         self.sigmoid = nn.Sigmoid()
         self.device=config['device']
-        self.conti2disc = torch.tensor([0.2, 0.4, 0.6, 0.8, 1.0]).to(self.device, right = True)
-        # https://pytorch.org/docs/stable/generated/torch.bucketize.html 
+        # https://pytorch.org/docs/stable/generated/torch.bucketize.html
 
 
         self._init_weights()
@@ -67,9 +69,14 @@ class SULM(nn.Module):
         return rating  # (B)
 
     def predict_discretized_rating(self, user, item):
-        continuous_rating = self.predict_rating(user, item)
-        discretized_rating = torch.bucketize(continuous_rating, self.conti2disc)
-        return discretized_rating
+        """ concatenate the user and item embeddings and feed into the classifier
+        """
+        u_emb = self.user_tag_embeddings[user].sum(dim=1)  # (B, E)
+        i_emb = self.item_tag_embeddings[item].sum(dim=1)  # (B, E)
+        ui_cat_emb = torch.cat((u_emb, i_emb), dim=1)  # (B, 2E)
+        rating = self.rating_classifier(ui_cat_emb)  # (B, 5)
+        return rating  # (B, 5)
+
 
     # Calculate the aspect sentiments predictions based on user and item profile
     def get_all_tag_score(self, user, item):

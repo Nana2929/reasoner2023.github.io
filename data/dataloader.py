@@ -30,14 +30,9 @@ def load_pickle(path):
         return pickle.load(f)
 
 
-def load_tag_list(path):
-    # load from  a python file
-    sys.path.append("/home/P76114511/projects/enrich_absa")
-    from resources import yelp_aspect_categories as yelp_ac
+def load_tag_list(path: str):
 
-    # TODO: need to add extra label such as service, price, etc.... (use wordnet?)
-
-    return yelp_ac.get_label_list()
+    return load_pickle(path)
 
 
 class TagDataLoader:
@@ -50,11 +45,14 @@ class TagDataLoader:
         self.tag_num = 0
         self.interaction_num = 0
 
-        train_path = dataset_root / config.data.train_filename
-        valid_path = dataset_root / config.data.valid_filename
-        test_path = dataset_root / config.data.test_filename
+        dataset_root = Path(dataset_root)
 
-        self.initialize(train_path, valid_path, test_path)
+        train_path = dataset_root / "train_reviews.pkl"
+        valid_path = dataset_root / "val_reviews.pkl"
+        test_path = dataset_root / "test_reviews.pkl"
+        aspect_index_path = dataset_root / "aspect_category_index.pkl"
+
+        self.initialize(train_path, valid_path, test_path, aspect_index_path)
 
         self.user_num = len(self.user_set)
         self.item_num = len(self.item_set)
@@ -63,7 +61,7 @@ class TagDataLoader:
         for k, v in config.items():
             setattr(self, k, v)
 
-    def initialize(self, train_path: str, valid_path: str, test_path: str):
+    def initialize(self, train_path: str, valid_path: str, test_path: str, aspect_index_path: str):
         #
         self.trainset, self.validset, self.testset = self.__load_data(
             train_path, valid_path, test_path
@@ -74,7 +72,7 @@ class TagDataLoader:
         self.valid_size = len(self.validset)
         self.test_size = len(self.testset)
 
-        tag_list = load_tag_list()
+        tag_list = load_tag_list(aspect_index_path)
         self.tag_num = len(set(tag_list))
 
         for review in reviews:
@@ -86,6 +84,7 @@ class TagDataLoader:
                 self.max_rating = rating
             if self.min_rating > rating:
                 self.min_rating = rating
+        self.rating_num = int(self.max_rating - self.min_rating + 1)
 
     def __load_data(self, train_path, valid_path, test_path):
         train_data = load_pickle(train_path)
@@ -103,7 +102,6 @@ class TagDataLoader:
 
         Returns:
             interaction matrix
-
         """
 
         # X for user-side，Y for item-side
@@ -137,7 +135,7 @@ class TagDataLoader:
         tag_matrics = torch.where(tag_matrics == 0, tag_matrics, normal_tag_matrics)
         return tag_matrics
 
-    # EF    M item-tag interaction matrix
+    # EFM item-tag interaction matrix
     def efm_quality_score(self, tag_matrics):
         normal_tag_matrics = 1 + (self.rating_scale - 1) / (1 + torch.exp(-tag_matrics))
         tag_matrics = torch.where(tag_matrics == 0, tag_matrics, normal_tag_matrics)
@@ -186,10 +184,10 @@ class TagDataLoader:
             r = d["rating"]
 
             userItem[u][i] = r
-            for t in eval(d["aspect_pos_tag"]):
+            for t in eval(d["pos_aspect_tag"]):
                 userAspect[u][t] += 1
                 itemAspect[i][t] += 1
-            for t in eval(d["aspect_neg_tag"]):
+            for t in eval(d["neg_aspect_tag"]):
                 userAspect[u][t] -= 1
                 itemAspect[i][t] -= 1
         # TF term weighting

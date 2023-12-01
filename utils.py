@@ -3,13 +3,14 @@
 # @Author : Jingsen Zhang
 # @Email  : zhangjingsen@ruc.edu.cn
 
-import torch
-import random
 import datetime
-import numpy as np
 import importlib
+import random
 
-from data.dataloader import TagDataLoader, ReviewDataLoader
+import numpy as np
+import torch
+
+from data.dataloader import TagDataLoader
 
 
 def get_model(model_name):
@@ -36,11 +37,12 @@ def get_model(model_name):
     return model_class
 
 
-def get_trainer(model_type, model_name):
+def get_trainer(model_type: str, model_name: str, tagset_num:int):
     r"""Automatically select trainer class based on model type and model name
 
     Args:
         model_type (ModelType): model type
+        tagset_num (int): number of tagset (1 or 2)
         model_name (str): model name
     Returns:
         Trainer: trainer class
@@ -51,7 +53,10 @@ def get_trainer(model_type, model_name):
         if model_type == 'review_aware':
             return getattr(importlib.import_module('trainer'), 'ReviewTrainer')
         else:
-            return getattr(importlib.import_module('trainer'), 'Trainer')
+            if tagset_num == 1:
+                return getattr(importlib.import_module('trainer'), 'OneTagTrainer')
+            else:
+                return getattr(importlib.import_module('trainer'), 'TwoTagTrainer')
 
 
 def get_dataloader(model_type):
@@ -65,7 +70,7 @@ def get_dataloader(model_type):
         return ReviewDataLoader
 
 
-def get_batchify(model_type, model_name, train_type, procedure):
+def get_batchify(model_type, model_name, train_type, procedure, tagset_num):
     try:
         return getattr(importlib.import_module('data'), model_name + 'Batchify')
     except AttributeError:
@@ -73,14 +78,20 @@ def get_batchify(model_type, model_name, train_type, procedure):
             return getattr(importlib.import_module('data'), 'ReviewBatchify')
         else:
             if procedure == 'test':
-                return getattr(importlib.import_module('data'), 'TagTestBatchify')
+                if tagset_num == 1:
+                    return getattr(importlib.import_module('data'), 'OneTagTestBatchify')
+                else:
+                    return getattr(importlib.import_module('data'), 'TwoTagTestBatchify')
             else:
                 if train_type == 'bpr':
                     return getattr(importlib.import_module('data'), 'NegSamplingBatchify')
                 else:
-                    return getattr(importlib.import_module('data'), 'Batchify')
-                
-                
+                    if tagset_num == 1:
+                        return getattr(importlib.import_module('data'), 'OneTagBatchify')
+                    else:
+                        return getattr(importlib.import_module('data'), 'TwoTagBatchify')
+
+
 def now_time():
     return '[' + datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S') + ']: '
 
