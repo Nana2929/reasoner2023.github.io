@@ -5,6 +5,7 @@
 
 import datetime
 import importlib
+import pickle
 import random
 
 import numpy as np
@@ -71,6 +72,7 @@ def get_dataloader(model_type):
 
 
 def get_batchify(model_type, model_name, train_type, procedure, tagset_num):
+    tagset_num_prefix = "OneTag" if tagset_num == 1 else "TwoTag"
     try:
         return getattr(importlib.import_module('data'), model_name + 'Batchify')
     except AttributeError:
@@ -78,18 +80,12 @@ def get_batchify(model_type, model_name, train_type, procedure, tagset_num):
             return getattr(importlib.import_module('data'), 'ReviewBatchify')
         else:
             if procedure == 'test':
-                if tagset_num == 1:
-                    return getattr(importlib.import_module('data'), 'OneTagTestBatchify')
-                else:
-                    return getattr(importlib.import_module('data'), 'TwoTagTestBatchify')
+                return getattr(importlib.import_module('data'), f"{tagset_num_prefix}TestBatchify")
             else:
                 if train_type == 'bpr':
-                    return getattr(importlib.import_module('data'), 'NegSamplingBatchify')
+                    return getattr(importlib.import_module('data'), f"{tagset_num_prefix}NegSamplingBatchify")
                 else:
-                    if tagset_num == 1:
-                        return getattr(importlib.import_module('data'), 'OneTagBatchify')
-                    else:
-                        return getattr(importlib.import_module('data'), 'TwoTagBatchify')
+                    return getattr(importlib.import_module('data'), f"{tagset_num_prefix}Batchify")
 
 
 def now_time():
@@ -129,3 +125,24 @@ def ids2tokens(ids, word2idx, idx2word):  # tranform ids to token_seq(sentence)
             break
         tokens.append(idx2word[i])
     return tokens
+
+
+def save_pickle(data: any, file_path: str):
+    r"""Save data in pickle format.
+
+    Args:
+        data (obj): data to be saved
+        file_path (str): path of the file to save
+    """
+    with open(file_path, 'wb') as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+def load_pickle(file_path: str):
+    r"""Load data from pickle file.
+
+    Args:
+        file_path (str): path of the file to load
+    """
+    with open(file_path, 'rb') as f:
+        data = pickle.load(f)
+    return data
