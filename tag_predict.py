@@ -9,8 +9,18 @@ import os
 from pathlib import Path
 
 import torch
+
 from config import Config
-from utils import get_batchify, get_dataloader, get_model, get_trainer, now_time, set_seed
+from utils import (
+    get_batchify,
+    get_dataloader,
+    get_model,
+    get_trainer,
+    load_pickle,
+    now_time,
+    save_pickle,
+    set_seed,
+)
 
 links = {
     "yelp23": "",
@@ -39,20 +49,15 @@ main_log_dir.mkdir(parents=True, exist_ok=True)
 
 
 # {args.dataset_name}-{args.model}-rating_train_type={config['rating_train_type']}-tagset_num={config['tagset_num']}
-exp_log_dir = main_log_dir/ '{}-{}-rating_train_type={}-tagset_num={}-{}'.format(args.dataset_name, args.model, config['rating_train_type'], config['tagset_num'], now_time())
+exp_log_dir = main_log_dir/ '{}-{}-rating_train_type={}-tagset_num={}'.format(args.dataset_name, args.model, config['rating_train_type'], config['tagset_num'])
 exp_log_dir.mkdir(parents=True, exist_ok=True)
 logger_file = exp_log_dir / 'run.log'
-os.system('cp {} {}'.format(args.config, exp_log_dir))
+os.system(f"cp {args.config} \"{exp_log_dir}\"")
 fh = logging.FileHandler(logger_file)
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(fh)
-
-logger.info('-' * 40 + 'ARGUMENTS' + '-' * 40)
-for param in config:
-    logger.info('{:40} {}'.format(param, config[param]))
-logger.info('-' * 40 + 'ARGUMENTS' + '-' * 40)
 
 if not os.path.exists(config['checkpoint']):
     os.makedirs(config['checkpoint'])
@@ -79,6 +84,7 @@ if root is None:
 
 
 corpus = get_dataloader(config['model_type'])(dataset_root = root, config=config)
+logger.info(f"Corpus type: {corpus}")
 tag_num = corpus.tag_num
 user_num = corpus.user_num
 item_num = corpus.item_num
@@ -89,23 +95,40 @@ config['rating_num'] = corpus.rating_num
 config['dataset'] = args.dataset_name
 logger.info(now_time() + '{}: user_num:{} | item_num:{} | tag_num:{}'.format(config['dataset'], user_num, item_num, tag_num))
 logger.info(now_time() + 'trainset:{} | validset:{} | testset:{}'.format(trainset_size, validset_size, testset_size))
-train_data = get_batchify(model_type = config['model_type'],
-                          model_name = config['model'],
-                          train_type = config['train_type'],
-                          procedure = 'train',
-                        tagset_num= config['tagset_num']
-                          )(corpus.trainset, config, tag_num, shuffle=True)
-val_data = get_batchify(model_type = config['model_type'],
-                          model_name = config['model'],
-                          train_type = config['train_type'],
-                          procedure = 'valid',
-                        tagset_num= config['tagset_num']
-                        )(corpus.validset, config, tag_num)
-test_data = get_batchify( model_type = config['model_type'],
-                          model_name = config['model'],
-                          train_type = config['train_type'],
-                          procedure = 'test',
-                        tagset_num= config['tagset_num'])(corpus.testset, config, tag_num)
+
+
+cache_dir = f".cache/model_type={config['model_type']}-model_name={config['model']}-train_type={config['train_type']}-tagset_num={config['tagset_num']}"
+# if the dir does not exists or the dir is empty
+if not os.path.exists(cache_dir) or len(os.listdir(cache_dir)) == 0:
+    os.makedirs(cache_dir, exist_ok=True)
+    train_data = get_batchify(model_type = config['model_type'],
+                            model_name = config['model'],
+                            train_type = config['train_type'],
+                            procedure = 'train',
+                            tagset_num= config['tagset_num']
+                            )(corpus.trainset, config, tag_num, shuffle=True)
+    val_data = get_batchify(model_type = config['model_type'],
+                            model_name = config['model'],
+                            train_type = config['train_type'],
+                            procedure = 'valid',
+                            tagset_num= config['tagset_num']
+                            )(corpus.validset, config, tag_num)
+    test_data = get_batchify(model_type = config['model_type'],
+                            model_name = config['model'],
+                            train_type = config['train_type'],
+                            procedure = 'test',
+                            tagset_num= config['tagset_num'])(corpus.testset, config, tag_num)
+    logger.info(f"Batichfy type: {train_data}")
+    save_pickle(train_data, os.path.join(cache_dir, 'train_data.pkl'))
+    save_pickle(val_data,os.path.join(cache_dir, 'val_data.pkl'))
+    save_pickle(test_data, os.path.join(cache_dir, 'test_data.pkl'))
+else:
+    logger.info(f"Cached dir found: {cache_dir}, loading from cache")
+    train_data = load_pickle(os.path.join(cache_dir, 'train_data.pkl'))
+    val_data = load_pickle(os.path.join(cache_dir, 'val_data.pkl'))
+    test_data = load_pickle(os.path.join(cache_dir, 'test_data.pkl'))
+
+
 
 # Bulid the user-item & user-tag & item-tag interaction matrix based on trainset
 if config['model'] == 'EFM' or config['model'] == 'AMF':
@@ -132,6 +155,11 @@ config['min_rating'] = corpus.min_rating
 config['device'] = device
 config['exp_log_dir'] = exp_log_dir
 
+logger.info('-' * 40 + 'ARGUMENTS' + '-' * 40)
+for param in config:
+    logger.info('{:40} {}'.format(param, config[param]))
+logger.info('-' * 40 + 'ARGUMENTS' + '-' * 40)
+
 ###############################################################################
 # Build the model
 ###############################################################################
@@ -140,16 +168,18 @@ model_name_variant = tagset_prefix + config['model']
 model = get_model(model_name_variant)(config).to(device)
 trainer = get_trainer(model_type = config['model_type'],
                       model_name = config['model'],
-                      tagset_num=config['tagset_num'])(config, model, train_data, val_data)
-logger.info(f"Config: {config}")
+                      tagset_num=config['tagset_num'],
+                      )(config, model, train_data, val_data,
+                        rating_train_type=config['rating_train_type'])
+
 ###############################################################################
-# Loop over epochs
+# Training the model
 ###############################################################################
 
 model_path, best_epoch = trainer.train_loop()
 
 ###############################################################################
-# For prediction
+# Inferencing the model
 ###############################################################################
 
 #============================
