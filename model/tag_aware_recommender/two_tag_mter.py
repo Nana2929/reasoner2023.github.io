@@ -3,6 +3,19 @@
 # @Author : Jingsen Zhang
 # @Email  : zhangjingsen@ruc.edu.cn
 
+'''
+@File    :   two_tag_mter.py
+@Time    :   2023/12/05 22:29:29
+@Author  :   Ching-Wen Yang
+@Version :   1.0
+@Contact :   P76114511@gs.ncku.edu.tw
+@Desc    :   Revision: Ching-Wen Yang
+MTER uses NegSamplingBatchify().
+To avoid confusion of negative sentiments with negative sampling,
+for sentiment polairites, we use good/bad;
+for positive/negtive sampling, we use pos/neg.
+'''
+
 r"""
 MTER
 ################################################
@@ -11,10 +24,11 @@ Reference:
 """
 import torch
 import torch.nn as nn
+
 from model.loss import BPRLoss
 
 
-class MTER(nn.Module):
+class TWO_TAG_MTER(nn.Module):
     r"""MTER is a multi-task learning solution for explainable recommendation. Two companion tasks of user preference
     modeling for recommendation and opinionated content modeling for explanation are integrated via a joint tensor factorization.
 
@@ -25,7 +39,7 @@ class MTER(nn.Module):
     """
 
     def __init__(self, config):
-        super(MTER, self).__init__()
+        super(TWO_TAG_MTER, self).__init__()
 
         self.device =config['device']
         self.candidate_num=config['candidate_num']
@@ -33,9 +47,8 @@ class MTER(nn.Module):
         self.item_embeddings = nn.Embedding(config['item_num'], config['i_emb_size'])
         self.core_tensor = nn.Parameter(torch.Tensor(config['u_emb_size'], config['i_emb_size'], config['t_emb_size']),
                                         requires_grad=True)
-        self.reason_tag_embeddings = nn.Embedding(config['tag_num'], config['t_emb_size'])
-        self.video_tag_embeddings = nn.Embedding(config['tag_num'], config['t_emb_size'])
-        self.interest_tag_embeddings = nn.Embedding(config['tag_num'], config['t_emb_size'])
+        self.good_tag_embeddings = nn.Embedding(config['tag_num'], config['t_emb_size'])
+        self.bad_tag_embeddings = nn.Embedding(config['tag_num'], config['t_emb_size'])
         self.tag_num = config['tag_num']
 
         self.bpr_loss = BPRLoss()
@@ -66,77 +79,57 @@ class MTER(nn.Module):
         t_score = torch.mul(t_score, u_emb).sum(-1)
         return t_score  # (B)
 
-    def calculate_rating_loss(self, user, item, rating_label):
+    def calculate_rating_mseloss(self, user, item, rating_label):
         predicted_rating = self.predict_rating(user, item)
         rating_loss = self.mse_loss(predicted_rating, rating_label)
         return rating_loss
 
-    def calculate_reason_loss(self, user, item, pos_tag, neg_tag):
+    def calculate_good_aspect_loss(self, user, item, pos_tag, neg_tag):
         u_emb = self.user_embeddings(user)
         i_emb = self.item_embeddings(item)
-        pos_emb = self.reason_tag_embeddings(pos_tag)
-        neg_emb = self.reason_tag_embeddings(neg_tag)
+        pos_emb = self.good_tag_embeddings(pos_tag)
+        neg_emb = self.good_tag_embeddings(neg_tag)
         pos_score = self.predict_tag_score(u_emb, i_emb, pos_emb)
         neg_score = self.predict_tag_score(u_emb, i_emb, neg_emb)
-        reason_loss = self.bpr_loss(pos_score, neg_score)
-        return reason_loss
+        good_aspect_loss = self.bpr_loss(pos_score, neg_score)
+        return good_aspect_loss
 
-    def calculate_video_loss(self, user, item, pos_tag, neg_tag):
-        u_emb = self.user_embeddings(user)
-        i_emb = self.item_embeddings(item)
-        pos_emb = self.video_tag_embeddings(pos_tag)
-        neg_emb = self.video_tag_embeddings(neg_tag)
-        pos_score = self.predict_tag_score(u_emb, i_emb, pos_emb)
-        neg_score = self.predict_tag_score(u_emb, i_emb, neg_emb)
-        video_loss = self.bpr_loss(pos_score, neg_score)
-        return video_loss
 
-    def calculate_interest_loss(self, user, item, pos_tag, neg_tag):
+    def calculate_bad_aspect_loss(self, user, item, pos_tag, neg_tag):
         u_emb = self.user_embeddings(user)
         i_emb = self.item_embeddings(item)
-        pos_emb = self.interest_tag_embeddings(pos_tag)
-        neg_emb = self.interest_tag_embeddings(neg_tag)
+        pos_emb = self.bad_tag_embeddings(pos_tag)
+        neg_emb = self.bad_tag_embeddings(neg_tag)
         pos_score = self.predict_tag_score(u_emb, i_emb, pos_emb)
         neg_score = self.predict_tag_score(u_emb, i_emb, neg_emb)
-        interest_loss = self.bpr_loss(pos_score, neg_score)
-        return interest_loss
+        bad_aspect_loss = self.bpr_loss(pos_score, neg_score)
+        return bad_aspect_loss
 
     def calculate_non_negative_reg(self):
         u_reg = torch.sum((torch.abs(self.user_embeddings.weight) - self.user_embeddings.weight))
         i_reg = torch.sum((torch.abs(self.item_embeddings.weight) - self.item_embeddings.weight))
-        reason_reg = torch.sum((torch.abs(self.reason_tag_embeddings.weight) - self.reason_tag_embeddings.weight))
-        video_reg = torch.sum((torch.abs(self.video_tag_embeddings.weight) - self.video_tag_embeddings.weight))
-        interest_reg = torch.sum((torch.abs(self.interest_tag_embeddings.weight) - self.interest_tag_embeddings.weight))
+        good_aspect_reg = torch.sum((torch.abs(self.good_tag_embeddings.weight) - self.good_tag_embeddings.weight))
+        bad_aspect_reg = torch.sum((torch.abs(self.bad_tag_embeddings.weight) - self.bad_tag_embeddings.weight))
         core_tensor_reg = torch.sum((torch.abs(self.core_tensor) - self.core_tensor))
-        non_negative_reg = u_reg + i_reg + reason_reg + video_reg + interest_reg + core_tensor_reg
+        non_negative_reg = u_reg + i_reg + good_aspect_reg + bad_aspect_reg + core_tensor_reg
         return non_negative_reg
 
-    def rank_reason_tags(self, user, item, tag):
+    def rank_good_tags(self, user, item, tag):
         score = torch.tensor([]).to(self.device)
         for i in range(user.size()[0]):
             u_emb = self.user_embeddings(user[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
             i_emb = self.item_embeddings(item[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
-            t_emb = self.reason_tag_embeddings(tag[i])  # (C,E)
+            t_emb = self.good_tag_embeddings(tag[i])  # (C,E)
             s = self.predict_tag_score(u_emb, i_emb, t_emb).unsqueeze(0)  # (C)->(1,C)
             score = torch.cat((score, s), dim=0)  # (B,C)
         return score
 
-    def rank_video_tags(self, user, item, tag):
+    def rank_bad_tags(self, user, item, tag):
         score = torch.tensor([]).to(self.device)
         for i in range(user.size()[0]):
             u_emb = self.user_embeddings(user[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
             i_emb = self.item_embeddings(item[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
-            t_emb = self.video_tag_embeddings(tag[i])  # (C,E)
-            s = self.predict_tag_score(u_emb, i_emb, t_emb).unsqueeze(0)  # (C)
-            score = torch.cat((score, s), dim=0)
-        return score
-
-    def rank_interest_tags(self, user, item, tag):
-        score = torch.tensor([]).to(self.device)
-        for i in range(user.size()[0]):
-            u_emb = self.user_embeddings(user[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
-            i_emb = self.item_embeddings(item[i]).repeat(tag.size()[1], 1)  # (1,E) -> (C,E)
-            t_emb = self.interest_tag_embeddings(tag[i])  # (C,E)
+            t_emb = self.bad_tag_embeddings(tag[i])  # (C,E)
             s = self.predict_tag_score(u_emb, i_emb, t_emb).unsqueeze(0)  # (C)
             score = torch.cat((score, s), dim=0)
         return score
