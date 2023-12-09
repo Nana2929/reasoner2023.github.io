@@ -26,4 +26,4 @@ main_log_dir: './tensorboard_logs'
 seed: 1111
 cuda: True
 gpu_id: 0
-checkpoint: './checkpoints/sulm'
+checkpoint: './checkpoints/sulm_2tag_ce'
